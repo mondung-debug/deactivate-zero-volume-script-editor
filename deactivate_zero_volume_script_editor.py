@@ -13,8 +13,9 @@
   - flat mesh(판 형태)도 zero-volume으로 탐지될 수 있음
   - Dry Run으로 먼저 확인 권장
 
-Dry Run: 탐지 결과만 로그 출력
-Run    : 실제로 active=false 처리
+Dry Run   : 탐지 결과만 로그 출력
+Deactivate: active=false 처리 (복구 가능)
+Delete    : prim 완전 삭제
 """
 
 import numpy as np
@@ -66,7 +67,8 @@ def _signed_volume(pts, idxs, cnts):
 
 # ─────────────────────────── main process ───────────────────────────────────
 
-def run_deactivate(vol_t, dry_run, log_fn):
+def run_deactivate(vol_t, action, log_fn):
+    """action: 'dry' | 'deactivate' | 'delete'"""
     ctx   = omni.usd.get_context()
     stage = ctx.get_stage()
     if stage is None:
@@ -76,7 +78,7 @@ def run_deactivate(vol_t, dry_run, log_fn):
     meshes = [p for p in stage.Traverse() if p.IsActive() and p.IsA(UsdGeom.Mesh)]
     log_fn(f"{len(meshes)} active mesh(es) found")
 
-    deactivated = skipped = 0
+    processed = skipped = 0
 
     for prim in meshes:
         path_str = prim.GetPath().pathString
@@ -93,18 +95,21 @@ def run_deactivate(vol_t, dry_run, log_fn):
             continue
 
         if vol <= vol_t:
-            if dry_run:
-                log_fn(f"  [DRY/ZERO] {path_str}  vol={vol:.6f}")
+            if action == "dry":
+                log_fn(f"  [DRY] {path_str}  vol={vol:.6f}")
+            elif action == "delete":
+                stage.RemovePrim(prim.GetPath())
+                log_fn(f"  [DELETE] {path_str}  vol={vol:.6f}")
             else:
                 prim.SetActive(False)
-                log_fn(f"  [ZERO] {path_str}  vol={vol:.6f}")
-            deactivated += 1
+                log_fn(f"  [DEACTIVATE] {path_str}  vol={vol:.6f}")
+            processed += 1
         else:
             skipped += 1
 
-    mode = "DRY RUN" if dry_run else "DEACTIVATED"
-    log_fn(f"Done ({mode}): {deactivated} zero-volume / {skipped} normal or skipped")
-    return deactivated, skipped
+    mode = {"dry": "DRY RUN", "delete": "DELETED", "deactivate": "DEACTIVATED"}.get(action, action.upper())
+    log_fn(f"Done ({mode}): {processed} zero-volume / {skipped} normal or skipped")
+    return processed, skipped
 
 # ───────────────────────────────── UI ────────────────────────────────────────
 
@@ -178,20 +183,17 @@ def _make_window():
                     def _run_dry():
                         log_lines.clear()
                         if log_ref[0]: log_ref[0].text = ""
-                        run_deactivate(
-                            vol_t=m_vol.get_value_as_float(),
-                            dry_run=True,
-                            log_fn=_append,
-                        )
+                        run_deactivate(vol_t=m_vol.get_value_as_float(), action="dry", log_fn=_append)
 
                     def _run_deactivate():
                         log_lines.clear()
                         if log_ref[0]: log_ref[0].text = ""
-                        run_deactivate(
-                            vol_t=m_vol.get_value_as_float(),
-                            dry_run=False,
-                            log_fn=_append,
-                        )
+                        run_deactivate(vol_t=m_vol.get_value_as_float(), action="deactivate", log_fn=_append)
+
+                    def _run_delete():
+                        log_lines.clear()
+                        if log_ref[0]: log_ref[0].text = ""
+                        run_deactivate(vol_t=m_vol.get_value_as_float(), action="delete", log_fn=_append)
 
                     ui.Button("Dry Run", height=BTN_H, clicked_fn=_run_dry,
                               style={"background_color": C_BTN_DRY,
@@ -200,6 +202,11 @@ def _make_window():
 
                     ui.Button("Deactivate", height=BTN_H, clicked_fn=_run_deactivate,
                               style={"background_color": C_BTN_RUN,
+                                     "color": C_TEXT,
+                                     "font_size": 13 * FONT_SCALE})
+
+                    ui.Button("Delete", height=BTN_H, clicked_fn=_run_delete,
+                              style={"background_color": 0xFF884400,
                                      "color": C_TEXT,
                                      "font_size": 13 * FONT_SCALE})
 
